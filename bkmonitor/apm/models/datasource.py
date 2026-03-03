@@ -552,6 +552,77 @@ class TraceDataSource(ApmDataSourceConfigBase):
     def to_json(self):
         return {**super().to_json(), "index_set_id": self.index_set_id}
 
+    def create_data_id(self):
+        """
+        创建数据源ID
+        当启用BKBase V4数据链路时, 直接从BKBase申请data_id并使用bkapm命名空间
+        否则走原有GSE链路
+        """
+        bk_tenant_id = bk_biz_id_to_bk_tenant_id(self.bk_biz_id)
+        if self.bk_data_id != -1:
+            return self.bk_data_id
+
+        # V4链路: 直接从BKBase申请data_id, 使用bkapm命名空间
+        if settings.TRACING_ENABLE_BKDATA:
+            from metadata.models.data_link.constants import BKBASE_NAMESPACE_BK_APM, DataLinkResourceStatus
+            from metadata.models.data_link.service import apply_data_id_v2, get_data_id_v2
+            from metadata.models.data_source import DataIdCreatedFromSystem
+
+            try:
+                apply_data_id_v2(
+                    bk_tenant_id=bk_tenant_id,
+                    data_name=self.data_name,
+                    bk_biz_id=self.bk_biz_id,
+                    namespace=BKBASE_NAMESPACE_BK_APM,
+                    event_type="log",  # trace数据类型为log
+                )
+            except BKAPIError as e:
+                logger.error("apply data id from bkdata error: %s", e)
+                raise
+
+            # 轮询获取data_id, 最大重试5次, 间隔3秒
+            import time
+            bk_data_id = None
+            for _ in range(5):
+                time.sleep(3)
+                try:
+                    data = get_data_id_v2(
+                        bk_tenant_id=bk_tenant_id,
+                        data_name=self.data_name,
+                        namespace=BKBASE_NAMESPACE_BK_APM,
+                    )
+                except BKAPIError as e:
+                    logger.error("get data id from bkdata error: %s", e)
+                    continue
+                if data["status"] == DataLinkResourceStatus.OK.value:
+                    bk_data_id = data["data_id"]
+                    break
+                if data["status"] == DataLinkResourceStatus.FAILED.value:
+                    raise BKAPIError(f"apply data id from bkdata failed, status is {data['status']}")
+
+            if bk_data_id is None:
+                raise BKAPIError("apply data id from bkdata timeout")
+
+            # 创建metadata.DataSource记录, 标记为BKDATA来源
+            # 这样create_result_table可以找到对应的DataSource
+            operator = get_global_user(bk_tenant_id=bk_tenant_id)
+            metadata_models.DataSource.create_data_source(
+                data_name=self.data_name,
+                bk_data_id=bk_data_id,
+                bk_tenant_id=bk_tenant_id,
+                operator=operator,
+                bk_biz_id=self.bk_biz_id,
+                created_from=DataIdCreatedFromSystem.BKDATA.value,
+                **self.DATA_ID_PARAM,
+            )
+
+            self.bk_data_id = bk_data_id
+            self.save()
+            return bk_data_id
+
+        # 原有GSE链路
+        return super().create_data_id()
+
     @classmethod
     @atomic(using=DATABASE_CONNECTION_NAME)
     def apply_datasource(cls, bk_biz_id, app_name, **options):

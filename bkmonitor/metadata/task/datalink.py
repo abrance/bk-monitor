@@ -10,6 +10,7 @@ from metadata.models import DataSource, DataSourceResultTable, ResultTable, Resu
 from metadata.models.bkdata.result_table import BkBaseResultTable
 from metadata.models.constants import DataIdCreatedFromSystem
 from metadata.models.data_link.data_link import DataLink
+from metadata.models.data_link.constants import BKBASE_NAMESPACE_BK_APM
 from metadata.models.data_link.data_link_configs import DorisStorageBindingConfig, ESStorageBindingConfig
 from metadata.models.result_table import LogV4DataLinkOption
 from metadata.models.storage import DorisStorage, ESStorage
@@ -275,7 +276,7 @@ def apply_apm_datalink(bk_tenant_id: str, table_id: str):
 
     # 如果datasource是gse创建的, 需要在bkbase上注册
     if data_source_created_from != DataIdCreatedFromSystem.BKDATA.value:
-        ds.register_to_bkbase(bk_biz_id=rt.bk_biz_id, namespace="bklog")
+        ds.register_to_bkbase(bk_biz_id=rt.bk_biz_id, namespace=BKBASE_NAMESPACE_BK_APM)
 
     # 获取或创建数据链路
     bkbase_rt = BkBaseResultTable.objects.filter(bk_tenant_id=bk_tenant_id, monitor_table_id=table_id).first()
@@ -297,7 +298,7 @@ def apply_apm_datalink(bk_tenant_id: str, table_id: str):
         datalink = DataLink.objects.create(
             bk_tenant_id=bk_tenant_id,
             data_link_name=data_link_name,
-            namespace="bklog",
+            namespace=BKBASE_NAMESPACE_BK_APM,
             data_link_strategy=DataLink.BK_APM,
             bk_data_id=ds.bk_data_id,
             table_ids=[table_id],
@@ -305,7 +306,7 @@ def apply_apm_datalink(bk_tenant_id: str, table_id: str):
     else:
         # 获取链路
         datalink = DataLink.objects.get(
-            bk_tenant_id=bk_tenant_id, data_link_name=bkbase_rt.data_link_name, namespace="bklog"
+            bk_tenant_id=bk_tenant_id, data_link_name=bkbase_rt.data_link_name, namespace=BKBASE_NAMESPACE_BK_APM
         )
         update_fields: list[str] = []
         if datalink.bk_data_id != ds.bk_data_id:
